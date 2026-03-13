@@ -1,10 +1,6 @@
 #!/usr/bin/env python3
 """
-Cirrus Training Script for Kaggle - GPU Optimized
-
-Usage in Kaggle:
-1. Add accelerator: GPU
-2. Run this script
+Cirrus Training Script for Kaggle - Multi-GPU Optimized
 """
 
 import sys
@@ -14,6 +10,7 @@ sys.path.insert(0, "/kaggle/working/cirrus-llm")
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
+from torch.nn.parallel import DataParallel
 from cirrus import CirrusModel, CirrusConfig
 from transformers import AutoTokenizer
 from datasets import load_dataset
@@ -21,46 +18,40 @@ from datasets import load_dataset
 
 def train_gpu(save_every=1000, max_steps=50000, resume_from=None):
     print("=" * 50)
-    print("Cirrus Training on Kaggle GPU - Optimized")
+    print("Cirrus Training on Kaggle GPU")
     print("=" * 50)
 
     if not torch.cuda.is_available():
         print("ERROR: No GPU!")
         return
 
-    device = torch.device("cuda")
-    print(f"GPU: {torch.cuda.get_device_name(0)}")
+    n_gpus = torch.cuda.device_count()
+    print(f"GPUs: {n_gpus}")
+    for i in range(n_gpus):
+        print(f"  {i}: {torch.cuda.get_device_name(i)}")
 
-    # Enable TF32 for faster computation
-    torch.backends.cuda.matmul.allow_tf32 = True
-    torch.backends.cudnn.allow_tf32 = True
+    device = torch.device("cuda")
 
     print("Loading model...")
     config = CirrusConfig.small()
     tokenizer = AutoTokenizer.from_pretrained("gpt2")
     config.vocab_size = tokenizer.vocab_size
 
-    # Optional cleanup - comment out to keep old checkpoints
-    # import glob, os
-    # for f in glob.glob("/kaggle/working/cirrus_*.pt"):
-    #     try:
-    #         os.remove(f)
-    #     except:
-    #         pass
-    # print("Cleaned up old checkpoints")
-
     model = CirrusModel(config).to(device)
 
-    # Try to compile if GPU supports it (Pascal GPUs like P100 don't support Triton)
+    # Wrap with DataParallel for multi-GPU
+    if n_gpus > 1:
+        print(f"Using {n_gpus} GPUs!")
+        model = nn.DataParallel(model)
+
+    # Try to compile if GPU supports it
     try:
         compute_capability = torch.cuda.get_device_capability()
         if compute_capability[0] >= 7:
             print("Compiling model...")
             model = torch.compile(model, mode="reduce-overhead")
         else:
-            print(
-                f"GPU compute {compute_capability} doesn't support torch.compile, skipping"
-            )
+            print(f"GPU compute {compute_capability} doesn't support torch.compile")
     except:
         pass
 
@@ -93,19 +84,37 @@ def train_gpu(save_every=1000, max_steps=50000, resume_from=None):
         import re
 
         checkpoint = torch.load(resume_from, map_location=device)
-        model.load_state_dict(checkpoint)
+        if n_gpus > 1:
+            model.module.load_state_dict(checkpoint)
+        else:
+            model.load_state_dict(checkpoint)
         match = re.search(r"cirrus_(?:quick_)?step(\d+)", resume_from)
         start_step = int(match.group(1)) if match else 0
         print(f"Resumed from {resume_from} at step {start_step}")
     else:
         start_step = 0
 
-    # Use DataLoader for batching
+    # Cleanup old saves but keep latest
+    import glob as g, os
+
+    old_files = sorted(
+        g.glob("/kaggle/working/cirrus_*.pt"),
+        key=lambda x: int(re.search(r"cirrus_(?:quick_)?step(\d+)", x).group(1))
+        if re.search(r"cirrus_(?:quick_)?step(\d+)", x)
+        else 0,
+    )
+    if old_files:
+        for f in old_files[:-1]:
+            try:
+                os.remove(f)
+            except:
+                pass
+        print(f"Kept only latest checkpoint")
+
     print("Loading dataset...")
     ds = load_dataset("allenai/c4", "en", split="train", streaming=True)
     ds = ds.shuffle(buffer_size=10000)
 
-    # Pre-tokenize for speed
     class TokenizedDataset:
         def __init__(self, raw_ds, tokenizer, max_len=512):
             self.raw_ds = raw_ds
@@ -152,27 +161,42 @@ def train_gpu(save_every=1000, max_steps=50000, resume_from=None):
         if step % 10 == 0:
             print(f"Step {step}/{max_steps} | loss: {loss.item():.4f}")
 
+        # Keep only latest quick save
         if step % 50 == 0:
-            import glob as g, os
-
-            for f in g.glob("/kaggle/working/cirrus_quick_*.pt")[:-2]:
+            for f in g.glob("/kaggle/working/cirrus_quick_*.pt"):
                 try:
                     os.remove(f)
                 except:
                     pass
-            torch.save(model.state_dict(), f"/kaggle/working/cirrus_quick_{step}.pt")
+            if n_gpus > 1:
+                torch.save(
+                    model.module.state_dict(), f"/kaggle/working/cirrus_quick_{step}.pt"
+                )
+            else:
+                torch.save(
+                    model.state_dict(), f"/kaggle/working/cirrus_quick_{step}.pt"
+                )
             torch.cuda.empty_cache()
 
+        # Keep only latest step save
         if step % save_every == 0:
-            for f in g.glob("/kaggle/working/cirrus_step*.pt")[:-3]:
+            for f in g.glob("/kaggle/working/cirrus_step*.pt"):
                 try:
                     os.remove(f)
                 except:
                     pass
-            torch.save(model.state_dict(), f"/kaggle/working/cirrus_step{step}.pt")
+            if n_gpus > 1:
+                torch.save(
+                    model.module.state_dict(), f"/kaggle/working/cirrus_step{step}.pt"
+                )
+            else:
+                torch.save(model.state_dict(), f"/kaggle/working/cirrus_step{step}.pt")
             print(f"✓ Saved cirrus_step{step}.pt")
 
-    torch.save(model.state_dict(), "/kaggle/working/cirrus_final.pt")
+    if n_gpus > 1:
+        torch.save(model.module.state_dict(), "/kaggle/working/cirrus_final.pt")
+    else:
+        torch.save(model.state_dict(), "/kaggle/working/cirrus_final.pt")
     print("=" * 50)
     print(f"DONE! Saved cirrus_final.pt")
     print("=" * 50)
