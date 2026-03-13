@@ -285,7 +285,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--resume", type=str, default=None)
     parser.add_argument("--steps", type=int, default=50000)
-    parser.add_argument("--batch", type=int, default=1)
+    parser.add_argument("--batch", type=int, default=2)
     parser.add_argument("--grad-accum", type=int, default=2)
     parser.add_argument("--compile", action="store_true")
     parser.add_argument("--model", type=str, default="small", choices=["tiny", "small"])
