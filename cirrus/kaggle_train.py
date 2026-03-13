@@ -67,7 +67,9 @@ def train_gpu(
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
 
     print(f"Model params: {sum(p.numel() for p in model.parameters()):,}")
-    print(f"Effective batch: {batch_size * grad_accum * n_gpus}")
+    print(
+        f"Effective batch: {batch_size} x {grad_accum} x {n_gpus} GPUs = {batch_size * grad_accum * n_gpus}"
+    )
 
     if not resume_from:
         import glob, re
@@ -282,7 +284,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--resume", type=str, default=None)
     parser.add_argument("--steps", type=int, default=50000)
-    parser.add_argument("--batch", type=int, default=1)
+    parser.add_argument("--batch", type=int, default=2)
     parser.add_argument("--grad-accum", type=int, default=4)
     parser.add_argument("--compile", action="store_true")
     parser.add_argument("--model", type=str, default="small", choices=["tiny", "small"])
