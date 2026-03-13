@@ -12,7 +12,13 @@ from tqdm import tqdm
 
 
 def train_gpu(
-    save_every=1000, max_steps=50000, resume_from=None, batch_size=4, compile_model=True
+    save_every=1000,
+    max_steps=50000,
+    resume_from=None,
+    batch_size=1,
+    grad_accum=4,
+    compile_model=False,
+    model_size="small",
 ):
     print("=" * 50)
     print("Cirrus Training on Kaggle GPU")
@@ -30,30 +36,38 @@ def train_gpu(
     device = torch.device("cuda")
 
     print("Loading model...")
-    config = CirrusConfig.small()
+    if model_size == "tiny":
+        config = CirrusConfig.tiny()
+    elif model_size == "small":
+        config = CirrusConfig.small()
+    else:
+        config = CirrusConfig.small()
+
     tokenizer = AutoTokenizer.from_pretrained("gpt2")
     config.vocab_size = tokenizer.vocab_size
 
     model = CirrusModel(config)
 
     if n_gpus > 1:
-        print(f"Using {n_gpus} GPUs with DataParallel! Batch size: {batch_size}")
+        print(
+            f"Using {n_gpus} GPUs with DataParallel! Batch: {batch_size}, GradAccum: {grad_accum}"
+        )
         model = nn.DataParallel(model, device_ids=list(range(n_gpus)))
 
     model = model.to(device)
 
     if compile_model:
-        print("Compiling model with torch.compile (this may take a few minutes)...")
+        print("Compiling model with torch.compile...")
         try:
             model = torch.compile(model, mode="reduce-overhead")
             print("torch.compile enabled!")
         except Exception as e:
-            print(f"torch.compile failed: {e}")
-            print("Continuing without compilation...")
+            print(f"torch.compile failed: {e}, continuing without...")
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
 
     print(f"Model params: {sum(p.numel() for p in model.parameters()):,}")
+    print(f"Effective batch: {batch_size * grad_accum * n_gpus}")
 
     if not resume_from:
         import glob, re
@@ -132,6 +146,7 @@ def train_gpu(
     model.train()
     step = start_step
     batch_buffer = []
+    grad_accum_counter = 0
 
     pbar = tqdm(total=max_steps, initial=step, desc="Training", unit="step")
 
@@ -171,42 +186,50 @@ def train_gpu(
             ignore_index=-1,
         )
 
+        loss = loss / grad_accum
         loss.backward()
-        optimizer.step()
+        grad_accum_counter += 1
 
-        step += 1
-        pbar.update(1)
-        pbar.set_postfix(loss=f"{loss.item():.4f}")
+        if grad_accum_counter >= grad_accum:
+            optimizer.step()
+            grad_accum_counter = 0
+            step += 1
+            pbar.update(1)
+            pbar.set_postfix(loss=f"{loss.item() * grad_accum:.4f}")
 
-        if step % 50 == 0:
-            for f in g.glob("/kaggle/working/cirrus_quick_*.pt"):
-                try:
-                    os.remove(f)
-                except:
-                    pass
-            if n_gpus > 1:
-                torch.save(
-                    model.module.state_dict(), f"/kaggle/working/cirrus_quick_{step}.pt"
-                )
-            else:
-                torch.save(
-                    model.state_dict(), f"/kaggle/working/cirrus_quick_{step}.pt"
-                )
-            torch.cuda.empty_cache()
+            if step % 50 == 0:
+                for f in g.glob("/kaggle/working/cirrus_quick_*.pt"):
+                    try:
+                        os.remove(f)
+                    except:
+                        pass
+                if n_gpus > 1:
+                    torch.save(
+                        model.module.state_dict(),
+                        f"/kaggle/working/cirrus_quick_{step}.pt",
+                    )
+                else:
+                    torch.save(
+                        model.state_dict(), f"/kaggle/working/cirrus_quick_{step}.pt"
+                    )
+                torch.cuda.empty_cache()
 
-        if step % save_every == 0:
-            for f in g.glob("/kaggle/working/cirrus_step*.pt"):
-                try:
-                    os.remove(f)
-                except:
-                    pass
-            if n_gpus > 1:
-                torch.save(
-                    model.module.state_dict(), f"/kaggle/working/cirrus_step{step}.pt"
-                )
-            else:
-                torch.save(model.state_dict(), f"/kaggle/working/cirrus_step{step}.pt")
-            pbar.write(f"✓ Saved cirrus_step{step}.pt")
+            if step % save_every == 0:
+                for f in g.glob("/kaggle/working/cirrus_step*.pt"):
+                    try:
+                        os.remove(f)
+                    except:
+                        pass
+                if n_gpus > 1:
+                    torch.save(
+                        model.module.state_dict(),
+                        f"/kaggle/working/cirrus_step{step}.pt",
+                    )
+                else:
+                    torch.save(
+                        model.state_dict(), f"/kaggle/working/cirrus_step{step}.pt"
+                    )
+                pbar.write(f"✓ Saved cirrus_step{step}.pt")
 
     if batch_buffer:
         max_len = max(t.shape[0] for t in batch_buffer)
@@ -232,11 +255,15 @@ def train_gpu(
             batch[:, 1:].reshape(-1),
             ignore_index=-1,
         )
+        loss = loss / grad_accum
         loss.backward()
+        grad_accum_counter += 1
+
+    if grad_accum_counter > 0:
         optimizer.step()
         step += 1
         pbar.update(1)
-        pbar.set_postfix(loss=f"{loss.item():.4f}")
+        pbar.set_postfix(loss=f"{loss.item() * grad_accum:.4f}")
 
     pbar.close()
 
@@ -255,12 +282,16 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--resume", type=str, default=None)
     parser.add_argument("--steps", type=int, default=50000)
-    parser.add_argument("--batch", type=int, default=4)
-    parser.add_argument("--no-compile", action="store_true")
+    parser.add_argument("--batch", type=int, default=1)
+    parser.add_argument("--grad-accum", type=int, default=4)
+    parser.add_argument("--compile", action="store_true")
+    parser.add_argument("--model", type=str, default="small", choices=["tiny", "small"])
     args = parser.parse_args()
     train_gpu(
         resume_from=args.resume,
         max_steps=args.steps,
         batch_size=args.batch,
-        compile_model=not args.no_compile,
+        grad_accum=args.grad_accum,
+        compile_model=args.compile,
+        model_size=args.model,
     )
