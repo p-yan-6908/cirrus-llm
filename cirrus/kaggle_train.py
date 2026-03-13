@@ -48,6 +48,15 @@ def train_gpu(
 
     model = CirrusModel(config)
 
+    if compile_model:
+        print("Compiling model with torch.compile (before DataParallel)...")
+        try:
+            model = torch.compile(model, mode="reduce-overhead")
+            print("torch.compile enabled!")
+        except Exception as e:
+            print(f"torch.compile failed: {e}, continuing without...")
+            model = CirrusModel(config)
+
     if n_gpus > 1:
         print(
             f"Using {n_gpus} GPUs with DataParallel! Batch: {batch_size}, GradAccum: {grad_accum}"
@@ -55,14 +64,6 @@ def train_gpu(
         model = nn.DataParallel(model, device_ids=list(range(n_gpus)))
 
     model = model.to(device)
-
-    if compile_model:
-        print("Compiling model with torch.compile...")
-        try:
-            model = torch.compile(model, mode="reduce-overhead")
-            print("torch.compile enabled!")
-        except Exception as e:
-            print(f"torch.compile failed: {e}, continuing without...")
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
 
