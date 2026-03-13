@@ -44,16 +44,19 @@ def train_gpu(save_every=1000, max_steps=50000, resume_from=None):
         print(f"Using {n_gpus} GPUs!")
         model = nn.DataParallel(model)
 
-    # Try to compile if GPU supports it
-    try:
-        compute_capability = torch.cuda.get_device_capability()
-        if compute_capability[0] >= 7:
-            print("Compiling model...")
-            model = torch.compile(model, mode="reduce-overhead")
-        else:
-            print(f"GPU compute {compute_capability} doesn't support torch.compile")
-    except:
-        pass
+    # Skip torch.compile on slow GPUs
+    USE_COMPILE = False
+
+    if USE_COMPILE:
+        try:
+            compute_capability = torch.cuda.get_device_capability()
+            if compute_capability[0] >= 7:
+                print("Compiling model...")
+                model = torch.compile(model, mode="reduce-overhead")
+            else:
+                print(f"GPU compute {compute_capability} doesn't support torch.compile")
+        except:
+            pass
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4, fused=True)
 
