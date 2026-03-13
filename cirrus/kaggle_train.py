@@ -180,6 +180,15 @@ def train_gpu(
         batch = torch.stack(padded).to(device)
         batch_buffer = []
 
+        if step % 100 == 0:
+            print(f"Batch shape: {batch.shape} (should be [2, seq_len])")
+            for i in range(n_gpus):
+                mem_allocated = torch.cuda.memory_allocated(i) / 1e9
+                mem_reserved = torch.cuda.memory_reserved(i) / 1e9
+                print(
+                    f"  GPU {i}: {mem_allocated:.2f}GB allocated, {mem_reserved:.2f}GB reserved"
+                )
+
         optimizer.zero_grad()
         logits, _, _, _ = model(batch)
 
