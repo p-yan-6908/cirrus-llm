@@ -41,10 +41,37 @@ def train_gpu(save_every=1000, max_steps=50000, resume_from=None):
 
     print(f"Model params: {sum(p.numel() for p in model.parameters()):,}")
 
+    # Auto-find latest checkpoint if none specified
+    if not resume_from:
+        import glob, re
+
+        quick_checkpoints = sorted(
+            glob.glob("/kaggle/working/cirrus_quick_*.pt"),
+            key=lambda x: int(re.search(r"cirrus_quick_(\d+)", x).group(1))
+            if re.search(r"cirrus_quick_(\d+)", x)
+            else 0,
+        )
+        step_checkpoints = sorted(
+            glob.glob("/kaggle/working/cirrus_step*.pt"),
+            key=lambda x: int(re.search(r"cirrus_step(\d+)", x).group(1))
+            if re.search(r"cirrus_step(\d+)", x)
+            else 0,
+        )
+        all_checkpoints = quick_checkpoints + step_checkpoints
+        if all_checkpoints:
+            resume_from = all_checkpoints[-1]
+            print(f"Auto-found checkpoint: {resume_from}")
+
     if resume_from:
+        import re
+
         checkpoint = torch.load(resume_from, map_location=device)
         model.load_state_dict(checkpoint)
-        print(f"Resumed from {resume_from}")
+        match = re.search(r"cirrus_(?:quick_step|step)(\d+)", resume_from)
+        start_step = int(match.group(1)) if match else 0
+        print(f"Resumed from {resume_from} at step {start_step}")
+    else:
+        start_step = 0
 
     # Dataset
     print("Loading C4 dataset...")
@@ -54,7 +81,7 @@ def train_gpu(save_every=1000, max_steps=50000, resume_from=None):
 
     # Training
     model.train()
-    step = 0
+    step = start_step
     total_loss = 0
 
     while step < max_steps:
@@ -89,8 +116,15 @@ def train_gpu(save_every=1000, max_steps=50000, resume_from=None):
             if step % 10 == 0:
                 print(f"Step {step}/{max_steps} | loss: {loss.item():.4f}")
 
-            # Backup save every 50 steps
+            # Backup save every 50 steps, delete old one
             if step % 50 == 0:
+                import glob, os
+
+                for f in glob.glob("/kaggle/working/cirrus_quick_*.pt"):
+                    try:
+                        os.remove(f)
+                    except:
+                        pass
                 torch.save(
                     model.state_dict(), f"/kaggle/working/cirrus_quick_{step}.pt"
                 )
