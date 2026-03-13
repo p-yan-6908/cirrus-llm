@@ -40,6 +40,16 @@ def train_gpu(save_every=1000, max_steps=50000, resume_from=None):
     tokenizer = AutoTokenizer.from_pretrained("gpt2")
     config.vocab_size = tokenizer.vocab_size
 
+    # Cleanup old saves at startup
+    import glob, os
+
+    for f in glob.glob("/kaggle/working/cirrus_*.pt"):
+        try:
+            os.remove(f)
+        except:
+            pass
+    print("Cleaned up old checkpoints")
+
     model = CirrusModel(config).to(device)
 
     # Compile model for faster execution
