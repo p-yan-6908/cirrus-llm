@@ -1,22 +1,19 @@
 #!/usr/bin/env python3
-"""
-Cirrus Training Script for Kaggle - Multi-GPU Optimized
-"""
-
 import sys
 
 sys.path.insert(0, "/kaggle/working/cirrus-llm")
 
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader
-from torch.nn.parallel import DataParallel
 from cirrus import CirrusModel, CirrusConfig
 from transformers import AutoTokenizer
 from datasets import load_dataset
+from tqdm import tqdm
 
 
-def train_gpu(save_every=1000, max_steps=50000, resume_from=None):
+def train_gpu(
+    save_every=1000, max_steps=50000, resume_from=None, batch_size=4, compile_model=True
+):
     print("=" * 50)
     print("Cirrus Training on Kaggle GPU")
     print("=" * 50)
@@ -37,16 +34,27 @@ def train_gpu(save_every=1000, max_steps=50000, resume_from=None):
     tokenizer = AutoTokenizer.from_pretrained("gpt2")
     config.vocab_size = tokenizer.vocab_size
 
-    model = CirrusModel(config).to(device)
+    model = CirrusModel(config)
 
-    # Skip torch.compile - causes issues on Kaggle
-    USE_COMPILE = False
+    if n_gpus > 1:
+        print(f"Using {n_gpus} GPUs with DataParallel! Batch size: {batch_size}")
+        model = nn.DataParallel(model, device_ids=list(range(n_gpus)))
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4, fused=True)
+    model = model.to(device)
+
+    if compile_model:
+        print("Compiling model with torch.compile (this may take a few minutes)...")
+        try:
+            model = torch.compile(model, mode="reduce-overhead")
+            print("torch.compile enabled!")
+        except Exception as e:
+            print(f"torch.compile failed: {e}")
+            print("Continuing without compilation...")
+
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
 
     print(f"Model params: {sum(p.numel() for p in model.parameters()):,}")
 
-    # Auto-find latest checkpoint
     if not resume_from:
         import glob, re
 
@@ -68,20 +76,19 @@ def train_gpu(save_every=1000, max_steps=50000, resume_from=None):
             print(f"Auto-found: {resume_from}")
 
     if resume_from:
-        import re
-
         checkpoint = torch.load(resume_from, map_location=device)
         if n_gpus > 1:
             model.module.load_state_dict(checkpoint)
         else:
             model.load_state_dict(checkpoint)
+        import re
+
         match = re.search(r"cirrus_(?:quick_)?step(\d+)", resume_from)
         start_step = int(match.group(1)) if match else 0
         print(f"Resumed from {resume_from} at step {start_step}")
     else:
         start_step = 0
 
-    # Cleanup old saves but keep latest
     import glob as g, os
 
     old_files = sorted(
@@ -124,19 +131,28 @@ def train_gpu(save_every=1000, max_steps=50000, resume_from=None):
 
     model.train()
     step = start_step
+    batch_buffer = []
 
-    for tokens in tokenized_ds:
+    pbar = tqdm(total=max_steps, initial=step, desc="Training", unit="step")
+
+    for item in tokenized_ds:
         if step >= max_steps:
             break
 
-        tokens = tokens.to(device)
+        batch_buffer.append(item)
+
+        if len(batch_buffer) < batch_size:
+            continue
+
+        batch = torch.stack(batch_buffer).to(device)
+        batch_buffer = []
 
         optimizer.zero_grad()
-        logits, _, _, _ = model(tokens.unsqueeze(0))
+        logits, _, _, _ = model(batch)
 
         loss = nn.functional.cross_entropy(
             logits[:, :-1, :].reshape(-1, config.vocab_size),
-            tokens[1:].reshape(-1),
+            batch[:, 1:].reshape(-1),
             ignore_index=-1,
         )
 
@@ -144,11 +160,9 @@ def train_gpu(save_every=1000, max_steps=50000, resume_from=None):
         optimizer.step()
 
         step += 1
+        pbar.update(1)
+        pbar.set_postfix(loss=f"{loss.item():.4f}")
 
-        if step % 10 == 0:
-            print(f"Step {step}/{max_steps} | loss: {loss.item():.4f}")
-
-        # Keep only latest quick save
         if step % 50 == 0:
             for f in g.glob("/kaggle/working/cirrus_quick_*.pt"):
                 try:
@@ -165,7 +179,6 @@ def train_gpu(save_every=1000, max_steps=50000, resume_from=None):
                 )
             torch.cuda.empty_cache()
 
-        # Keep only latest step save
         if step % save_every == 0:
             for f in g.glob("/kaggle/working/cirrus_step*.pt"):
                 try:
@@ -178,7 +191,24 @@ def train_gpu(save_every=1000, max_steps=50000, resume_from=None):
                 )
             else:
                 torch.save(model.state_dict(), f"/kaggle/working/cirrus_step{step}.pt")
-            print(f"✓ Saved cirrus_step{step}.pt")
+            pbar.write(f"✓ Saved cirrus_step{step}.pt")
+
+    if batch_buffer:
+        batch = torch.stack(batch_buffer).to(device)
+        optimizer.zero_grad()
+        logits, _, _, _ = model(batch)
+        loss = nn.functional.cross_entropy(
+            logits[:, :-1, :].reshape(-1, config.vocab_size),
+            batch[:, 1:].reshape(-1),
+            ignore_index=-1,
+        )
+        loss.backward()
+        optimizer.step()
+        step += 1
+        pbar.update(1)
+        pbar.set_postfix(loss=f"{loss.item():.4f}")
+
+    pbar.close()
 
     if n_gpus > 1:
         torch.save(model.module.state_dict(), "/kaggle/working/cirrus_final.pt")
@@ -195,5 +225,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--resume", type=str, default=None)
     parser.add_argument("--steps", type=int, default=50000)
+    parser.add_argument("--batch", type=int, default=4)
+    parser.add_argument("--no-compile", action="store_true")
     args = parser.parse_args()
-    train_gpu(resume_from=args.resume, max_steps=args.steps)
+    train_gpu(
+        resume_from=args.resume,
+        max_steps=args.steps,
+        batch_size=args.batch,
+        compile_model=not args.no_compile,
+    )
