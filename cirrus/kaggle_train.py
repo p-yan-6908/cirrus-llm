@@ -144,7 +144,22 @@ def train_gpu(
         if len(batch_buffer) < batch_size:
             continue
 
-        batch = torch.stack(batch_buffer).to(device)
+        max_len = max(t.shape[0] for t in batch_buffer)
+        padded = []
+        for t in batch_buffer:
+            if t.shape[0] < max_len:
+                t = torch.cat(
+                    [
+                        t,
+                        torch.full(
+                            (max_len - t.shape[0],),
+                            tokenizer.pad_token_id or 0,
+                            dtype=t.dtype,
+                        ),
+                    ]
+                )
+            padded.append(t)
+        batch = torch.stack(padded).to(device)
         batch_buffer = []
 
         optimizer.zero_grad()
@@ -194,7 +209,22 @@ def train_gpu(
             pbar.write(f"✓ Saved cirrus_step{step}.pt")
 
     if batch_buffer:
-        batch = torch.stack(batch_buffer).to(device)
+        max_len = max(t.shape[0] for t in batch_buffer)
+        padded = []
+        for t in batch_buffer:
+            if t.shape[0] < max_len:
+                t = torch.cat(
+                    [
+                        t,
+                        torch.full(
+                            (max_len - t.shape[0],),
+                            tokenizer.pad_token_id or 0,
+                            dtype=t.dtype,
+                        ),
+                    ]
+                )
+            padded.append(t)
+        batch = torch.stack(padded).to(device)
         optimizer.zero_grad()
         logits, _, _, _ = model(batch)
         loss = nn.functional.cross_entropy(
