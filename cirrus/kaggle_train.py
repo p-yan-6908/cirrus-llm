@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """
-Cirrus Training Script for Kaggle
+Cirrus Training Script for Kaggle - Optimized
 
 Usage in Kaggle:
-1. Upload cirrus-llm to Kaggle (or git clone)
-2. Add accelerator: GPU
-3. Run this script
+1. Add accelerator: GPU
+2. Run this script
 """
 
 import sys
@@ -19,7 +18,7 @@ from transformers import AutoTokenizer
 from datasets import load_dataset
 
 
-def train_gpu(epochs=5, save_every=1000, max_steps=50000):
+def train_gpu(save_every=1000, max_steps=50000):
     print("=" * 50)
     print("Cirrus Training on Kaggle GPU")
     print("=" * 50)
@@ -29,6 +28,7 @@ def train_gpu(epochs=5, save_every=1000, max_steps=50000):
         print("ERROR: No GPU!")
         return
 
+    device = torch.device("cuda")
     print(f"GPU: {torch.cuda.get_device_name(0)}")
 
     # Model
@@ -36,7 +36,7 @@ def train_gpu(epochs=5, save_every=1000, max_steps=50000):
     config = CirrusConfig.small()
     tokenizer = AutoTokenizer.from_pretrained("gpt2")
     config.vocab_size = tokenizer.vocab_size
-    model = CirrusModel(config).cuda()
+    model = CirrusModel(config).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
 
     print(f"Model params: {sum(p.numel() for p in model.parameters()):,}")
@@ -64,7 +64,7 @@ def train_gpu(epochs=5, save_every=1000, max_steps=50000):
             if tokens.shape[0] < 10:
                 continue
 
-            tokens = tokens.cuda()
+            tokens = tokens.to(device)
 
             optimizer.zero_grad()
             logits, _, _, _ = model(tokens.unsqueeze(0))
@@ -81,13 +81,11 @@ def train_gpu(epochs=5, save_every=1000, max_steps=50000):
             total_loss += loss.item()
             step += 1
 
-            if step % 50 == 0:
-                print(
-                    f"Step {step}/{max_steps} | loss: {loss.item():.4f} | avg: {total_loss / step:.4f}"
-                )
+            if step % 10 == 0:
+                print(f"Step {step}/{max_steps} | loss: {loss.item():.4f}")
 
             if step % save_every == 0:
-                torch.save(model.state_dict(), f"cirrus_step{step}.pt")
+                torch.save(model.state_dict(), f"/kaggle/working/cirrus_step{step}.pt")
                 print(f"✓ Saved cirrus_step{step}.pt")
 
             if step >= max_steps:
