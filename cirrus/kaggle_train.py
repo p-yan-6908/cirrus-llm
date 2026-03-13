@@ -18,7 +18,7 @@ from transformers import AutoTokenizer
 from datasets import load_dataset
 
 
-def train_gpu(save_every=1000, max_steps=50000):
+def train_gpu(save_every=1000, max_steps=50000, resume_from=None):
     print("=" * 50)
     print("Cirrus Training on Kaggle GPU")
     print("=" * 50)
@@ -40,6 +40,10 @@ def train_gpu(save_every=1000, max_steps=50000):
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
 
     print(f"Model params: {sum(p.numel() for p in model.parameters()):,}")
+
+    if resume_from:
+        model.load_state_dict(torch.load(resume_from))
+        print(f"Resumed from {resume_from}")
 
     # Dataset
     print("Loading C4 dataset...")
@@ -99,4 +103,13 @@ def train_gpu(save_every=1000, max_steps=50000):
 
 
 if __name__ == "__main__":
-    train_gpu()
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--resume", type=str, default=None, help="Path to checkpoint to resume from"
+    )
+    parser.add_argument("--steps", type=int, default=50000, help="Max steps")
+    args = parser.parse_args()
+
+    train_gpu(resume_from=args.resume, max_steps=args.steps)
