@@ -40,21 +40,29 @@ def train_gpu(save_every=1000, max_steps=50000, resume_from=None):
     tokenizer = AutoTokenizer.from_pretrained("gpt2")
     config.vocab_size = tokenizer.vocab_size
 
-    # Cleanup old saves at startup
-    import glob, os
-
-    for f in glob.glob("/kaggle/working/cirrus_*.pt"):
-        try:
-            os.remove(f)
-        except:
-            pass
-    print("Cleaned up old checkpoints")
+    # Optional cleanup - comment out to keep old checkpoints
+    # import glob, os
+    # for f in glob.glob("/kaggle/working/cirrus_*.pt"):
+    #     try:
+    #         os.remove(f)
+    #     except:
+    #         pass
+    # print("Cleaned up old checkpoints")
 
     model = CirrusModel(config).to(device)
 
-    # Compile model for faster execution
-    print("Compiling model (first run will be slow)...")
-    model = torch.compile(model, mode="reduce-overhead")
+    # Try to compile if GPU supports it (Pascal GPUs like P100 don't support Triton)
+    try:
+        compute_capability = torch.cuda.get_device_capability()
+        if compute_capability[0] >= 7:
+            print("Compiling model...")
+            model = torch.compile(model, mode="reduce-overhead")
+        else:
+            print(
+                f"GPU compute {compute_capability} doesn't support torch.compile, skipping"
+            )
+    except:
+        pass
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4, fused=True)
 
