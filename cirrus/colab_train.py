@@ -3,11 +3,13 @@
 Cirrus Training Script for Google Colab (GPU)
 
 Usage in Google Colab:
-1. Upload cirrus/ folder to Colab
+1. Upload cirrus-llm folder to Colab
 2. Run: !python3 colab_train.py
-
-OR copy-paste this into a Colab cell:
 """
+
+import sys
+
+sys.path.insert(0, "/content/cirrus-llm")
 
 import torch
 import torch.nn as nn
