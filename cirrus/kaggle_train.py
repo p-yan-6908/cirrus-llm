@@ -89,6 +89,12 @@ def train_gpu(save_every=1000, max_steps=50000, resume_from=None):
             if step % 10 == 0:
                 print(f"Step {step}/{max_steps} | loss: {loss.item():.4f}")
 
+            # Backup save every 50 steps
+            if step % 50 == 0:
+                torch.save(
+                    model.state_dict(), f"/kaggle/working/cirrus_quick_{step}.pt"
+                )
+
             if step % save_every == 0:
                 torch.save(model.state_dict(), f"/kaggle/working/cirrus_step{step}.pt")
                 print(f"✓ Saved cirrus_step{step}.pt")
