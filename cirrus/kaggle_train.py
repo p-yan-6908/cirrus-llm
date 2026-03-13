@@ -15,8 +15,8 @@ def train_gpu(
     save_every=1000,
     max_steps=50000,
     resume_from=None,
-    batch_size=1,
-    grad_accum=4,
+    batch_size=2,
+    grad_accum=2,
     compile_model=False,
     model_size="small",
 ):
@@ -189,8 +189,14 @@ def train_gpu(
             ignore_index=-1,
         )
 
+        if torch.isnan(loss) or torch.isinf(loss):
+            print(f"WARNING: NaN/Inf in loss at step {step}, skipping")
+            batch_buffer = []
+            continue
+
         loss = loss / grad_accum
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         grad_accum_counter += 1
 
         if grad_accum_counter >= grad_accum:
