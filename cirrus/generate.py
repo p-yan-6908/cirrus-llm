@@ -8,14 +8,21 @@ from transformers import AutoTokenizer
 
 
 def load_model(model_path=None, model_size="tiny"):
-    config = CirrusConfig.tiny() if model_size == "tiny" else CirrusConfig.small()
     tokenizer = AutoTokenizer.from_pretrained("gpt2")
+
+    if model_size == "tiny":
+        config = CirrusConfig.tiny()
+    elif model_size == "small":
+        config = CirrusConfig.small()
+    else:
+        config = CirrusConfig.small()
+
     config.vocab_size = tokenizer.vocab_size
 
     model = CirrusModel(config)
 
     if model_path:
-        model.load_state_dict(torch.load(model_path))
+        model.load_state_dict(torch.load(model_path, map_location="cpu"))
         print(f"Loaded trained weights from {model_path}")
     else:
         print("Using untrained model (random weights)")
