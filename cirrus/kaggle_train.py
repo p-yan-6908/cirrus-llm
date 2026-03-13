@@ -42,7 +42,8 @@ def train_gpu(save_every=1000, max_steps=50000, resume_from=None):
     print(f"Model params: {sum(p.numel() for p in model.parameters()):,}")
 
     if resume_from:
-        model.load_state_dict(torch.load(resume_from))
+        checkpoint = torch.load(resume_from, map_location=device)
+        model.load_state_dict(checkpoint)
         print(f"Resumed from {resume_from}")
 
     # Dataset
