@@ -36,6 +36,12 @@ def train_gpu(
 
     if single_gpu:
         n_gpus = 1
+        print("Using SINGLE GPU mode (DataParallel broken)")
+    elif multi_gpu:
+        n_gpus = torch.cuda.device_count()
+        print(f"Using {n_gpus} GPUs with DataParallel")
+    else:
+        n_gpus = 1
         print("Using SINGLE GPU mode")
 
     device = torch.device("cuda")
@@ -220,6 +226,8 @@ def train_gpu(
             pbar.update(1)
             pbar.set_postfix(loss=f"{loss.item() * grad_accum:.4f}")
 
+            torch.cuda.empty_cache()
+
             if step % 50 == 0:
                 for f in g.glob("/kaggle/working/cirrus_quick_*.pt"):
                     try:
@@ -309,7 +317,8 @@ if __name__ == "__main__":
     parser.add_argument("--grad-accum", type=int, default=2)
     parser.add_argument("--compile", action="store_true")
     parser.add_argument("--model", type=str, default="small", choices=["tiny", "small"])
-    parser.add_argument("--single-gpu", action="store_true")
+    parser.add_argument("--single-gpu", action="store_true", default=True)
+    parser.add_argument("--multi-gpu", action="store_true")
     args = parser.parse_args()
     train_gpu(
         resume_from=args.resume,
@@ -318,5 +327,5 @@ if __name__ == "__main__":
         grad_accum=args.grad_accum,
         compile_model=args.compile,
         model_size=args.model,
-        single_gpu=args.single_gpu,
+        single_gpu=not args.multi_gpu,
     )
