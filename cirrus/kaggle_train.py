@@ -19,6 +19,7 @@ def train_gpu(
     grad_accum=2,
     compile_model=False,
     model_size="small",
+    single_gpu=False,
 ):
     print("=" * 50)
     print("Cirrus Training on Kaggle GPU")
@@ -32,6 +33,10 @@ def train_gpu(
     print(f"GPUs: {n_gpus}")
     for i in range(n_gpus):
         print(f"  {i}: {torch.cuda.get_device_name(i)}")
+
+    if single_gpu:
+        n_gpus = 1
+        print("Using SINGLE GPU mode")
 
     device = torch.device("cuda")
 
@@ -304,6 +309,7 @@ if __name__ == "__main__":
     parser.add_argument("--grad-accum", type=int, default=2)
     parser.add_argument("--compile", action="store_true")
     parser.add_argument("--model", type=str, default="small", choices=["tiny", "small"])
+    parser.add_argument("--single-gpu", action="store_true")
     args = parser.parse_args()
     train_gpu(
         resume_from=args.resume,
@@ -312,4 +318,5 @@ if __name__ == "__main__":
         grad_accum=args.grad_accum,
         compile_model=args.compile,
         model_size=args.model,
+        single_gpu=args.single_gpu,
     )
