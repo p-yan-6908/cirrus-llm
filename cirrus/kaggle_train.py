@@ -40,8 +40,8 @@ def train_gpu(
         n_gpus = 1
         print("Using SINGLE GPU mode")
     else:
-        n_gpus = 1
-        print("Using SINGLE GPU mode")
+        n_gpus = torch.cuda.device_count()
+        print(f"Using {n_gpus} GPUs with DataParallel")
 
     device = torch.device("cuda")
 
@@ -349,7 +349,7 @@ if __name__ == "__main__":
     parser.add_argument("--steps", type=int, default=50000)
     parser.add_argument("--batch", type=int, default=1)
     parser.add_argument("--grad-accum", type=int, default=4)
-    parser.add_argument("--model", type=str, default="small", choices=["tiny", "small"])
+    parser.add_argument("--model", type=str, default="tiny", choices=["tiny", "small"])
     parser.add_argument("--single-gpu", action="store_true")
     parser.add_argument("--multi-gpu", action="store_true")
     parser.add_argument("--max-seq-len", type=int, default=256)
