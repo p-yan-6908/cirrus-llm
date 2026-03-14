@@ -349,7 +349,7 @@ if __name__ == "__main__":
     parser.add_argument("--steps", type=int, default=50000)
     parser.add_argument("--batch", type=int, default=1)
     parser.add_argument("--grad-accum", type=int, default=4)
-    parser.add_argument("--model", type=str, default="tiny", choices=["tiny", "small"])
+    parser.add_argument("--model", type=str, default="small", choices=["tiny", "small"])
     parser.add_argument("--single-gpu", action="store_true")
     parser.add_argument("--multi-gpu", action="store_true")
     parser.add_argument("--max-seq-len", type=int, default=256)
