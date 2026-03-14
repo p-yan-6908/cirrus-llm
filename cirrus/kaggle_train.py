@@ -80,22 +80,20 @@ def train_gpu(
     if not resume_from:
         import glob, re
 
-        quick = sorted(
-            glob.glob("/kaggle/working/cirrus_quick_*.pt"),
-            key=lambda x: int(re.search(r"cirrus_quick_(\d+)", x).group(1))
-            if re.search(r"cirrus_quick_(\d+)", x)
-            else 0,
-        )
-        steps = sorted(
-            glob.glob("/kaggle/working/cirrus_step*.pt"),
-            key=lambda x: int(re.search(r"cirrus_step(\d+)", x).group(1))
-            if re.search(r"cirrus_step(\d+)", x)
-            else 0,
-        )
-        all_ckpts = quick + steps
+        # Find all checkpoints and get the highest step number
+        all_ckpts = glob.glob("/kaggle/working/cirrus_*.pt")
         if all_ckpts:
-            resume_from = all_ckpts[-1]
-            print(f"Auto-found: {resume_from}")
+            # Extract step numbers from filenames
+            step_nums = []
+            for f in all_ckpts:
+                match = re.search(r"cirrus_(?:quick_)?step(\d+)", f)
+                if match:
+                    step_nums.append((f, int(match.group(1))))
+            if step_nums:
+                # Sort by step number and pick the highest
+                step_nums.sort(key=lambda x: x[1])
+                resume_from = step_nums[-1][0]
+                print(f"Auto-found: {resume_from}")
 
     if resume_from:
         checkpoint = torch.load(resume_from, map_location=device)
@@ -351,7 +349,6 @@ if __name__ == "__main__":
     parser.add_argument("--grad-accum", type=int, default=4)
     parser.add_argument("--model", type=str, default="small", choices=["tiny", "small"])
     parser.add_argument("--single-gpu", action="store_true")
-    parser.add_argument("--multi-gpu", action="store_true")
     parser.add_argument("--max-seq-len", type=int, default=256)
     parser.add_argument("--no-fp16", action="store_true")
     args = parser.parse_args()
