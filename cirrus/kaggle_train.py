@@ -84,14 +84,14 @@ def train_gpu(
         # Find all checkpoints and get the highest step number
         all_ckpts = glob.glob("/kaggle/working/cirrus_*.pt")
         if all_ckpts:
-            # Extract step numbers from filenames
             step_nums = []
             for f in all_ckpts:
                 match = re.search(r"cirrus_(?:quick_)?step(\d+)", f)
+                if not match:
+                    match = re.search(r"cirrus_quick_(\d+)", f)
                 if match:
                     step_nums.append((f, int(match.group(1))))
             if step_nums:
-                # Sort by step number and pick the highest
                 step_nums.sort(key=lambda x: x[1])
                 resume_from = step_nums[-1][0]
                 print(f"Auto-found: {resume_from}")
