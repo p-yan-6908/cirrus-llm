@@ -22,6 +22,7 @@ def train_gpu(
     single_gpu=False,
     max_seq_len=256,
     fp16=True,
+    lr=1e-4,
 ):
     print("=" * 50)
     print("Cirrus Training on Kaggle GPU")
@@ -66,7 +67,7 @@ def train_gpu(
 
     model = model.to(device)
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
 
     scaler = torch.cuda.amp.GradScaler() if fp16 else None
 
@@ -347,6 +348,7 @@ if __name__ == "__main__":
     parser.add_argument("--steps", type=int, default=50000)
     parser.add_argument("--batch", type=int, default=1)
     parser.add_argument("--grad-accum", type=int, default=4)
+    parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--model", type=str, default="small", choices=["tiny", "small"])
     parser.add_argument("--single-gpu", action="store_true", default=False)
     parser.add_argument("--max-seq-len", type=int, default=256)
@@ -362,4 +364,5 @@ if __name__ == "__main__":
         single_gpu=args.single_gpu,
         max_seq_len=args.max_seq_len,
         fp16=not args.no_fp16,
+        lr=args.lr,
     )
