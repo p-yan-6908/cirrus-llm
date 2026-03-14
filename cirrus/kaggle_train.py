@@ -15,11 +15,13 @@ def train_gpu(
     save_every=1000,
     max_steps=50000,
     resume_from=None,
-    batch_size=2,
-    grad_accum=2,
+    batch_size=1,
+    grad_accum=4,
     compile_model=False,
     model_size="small",
     single_gpu=False,
+    max_seq_len=256,
+    fp16=True,
 ):
     print("=" * 50)
     print("Cirrus Training on Kaggle GPU")
@@ -36,17 +38,14 @@ def train_gpu(
 
     if single_gpu:
         n_gpus = 1
-        print("Using SINGLE GPU mode (DataParallel broken)")
-    elif multi_gpu:
-        n_gpus = torch.cuda.device_count()
-        print(f"Using {n_gpus} GPUs with DataParallel")
+        print("Using SINGLE GPU mode")
     else:
         n_gpus = 1
         print("Using SINGLE GPU mode")
 
     device = torch.device("cuda")
 
-    print("Loading model...")
+    print(f"Loading model (max_seq_len={max_seq_len})...")
     if model_size == "tiny":
         config = CirrusConfig.tiny()
     elif model_size == "small":
@@ -59,15 +58,6 @@ def train_gpu(
 
     model = CirrusModel(config)
 
-    if compile_model:
-        print("Compiling model with torch.compile (before DataParallel)...")
-        try:
-            model = torch.compile(model, mode="reduce-overhead")
-            print("torch.compile enabled!")
-        except Exception as e:
-            print(f"torch.compile failed: {e}, continuing without...")
-            model = CirrusModel(config)
-
     if n_gpus > 1:
         print(
             f"Using {n_gpus} GPUs with DataParallel! Batch: {batch_size}, GradAccum: {grad_accum}"
@@ -78,10 +68,14 @@ def train_gpu(
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
 
+    scaler = torch.cuda.amp.GradScaler() if fp16 else None
+
     print(f"Model params: {sum(p.numel() for p in model.parameters()):,}")
     print(
         f"Effective batch: {batch_size} x {grad_accum} x {n_gpus} GPUs = {batch_size * grad_accum * n_gpus}"
     )
+    if fp16:
+        print("Using FP16 mixed precision training")
 
     if not resume_from:
         import glob, re
@@ -154,8 +148,8 @@ def train_gpu(
                 if tokens.shape[0] > 10:
                     yield tokens
 
-    tokenized_ds = TokenizedDataset(ds, tokenizer)
-    print("Ready!")
+    tokenized_ds = TokenizedDataset(ds, tokenizer, max_len=max_seq_len)
+    print(f"Ready! (max_seq_len={max_seq_len})")
 
     model.train()
     step = start_step
@@ -192,22 +186,29 @@ def train_gpu(
         batch_buffer = []
 
         if step % 100 == 0:
-            print(f"Batch shape: {batch.shape} (should be [2, seq_len])")
-            for i in range(n_gpus):
-                mem_allocated = torch.cuda.memory_allocated(i) / 1e9
-                mem_reserved = torch.cuda.memory_reserved(i) / 1e9
-                print(
-                    f"  GPU {i}: {mem_allocated:.2f}GB allocated, {mem_reserved:.2f}GB reserved"
-                )
+            mem_allocated = torch.cuda.memory_allocated(0) / 1e9
+            mem_reserved = torch.cuda.memory_reserved(0) / 1e9
+            print(
+                f"Step {step} | Batch: {batch.shape} | GPU: {mem_allocated:.2f}GB / {mem_reserved:.2f}GB"
+            )
 
         optimizer.zero_grad()
-        logits, _, _, _ = model(batch)
 
-        loss = nn.functional.cross_entropy(
-            logits[:, :-1, :].reshape(-1, config.vocab_size),
-            batch[:, 1:].reshape(-1),
-            ignore_index=-1,
-        )
+        if fp16:
+            with torch.cuda.amp.autocast():
+                logits, _, _, _ = model(batch)
+                loss = nn.functional.cross_entropy(
+                    logits[:, :-1, :].reshape(-1, config.vocab_size),
+                    batch[:, 1:].reshape(-1),
+                    ignore_index=-1,
+                )
+        else:
+            logits, _, _, _ = model(batch)
+            loss = nn.functional.cross_entropy(
+                logits[:, :-1, :].reshape(-1, config.vocab_size),
+                batch[:, 1:].reshape(-1),
+                ignore_index=-1,
+            )
 
         if torch.isnan(loss) or torch.isinf(loss):
             print(f"WARNING: NaN/Inf in loss at step {step}, skipping")
@@ -215,12 +216,24 @@ def train_gpu(
             continue
 
         loss = loss / grad_accum
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+
+        if fp16:
+            scaler.scale(loss).backward()
+        else:
+            loss.backward()
+
         grad_accum_counter += 1
 
         if grad_accum_counter >= grad_accum:
-            optimizer.step()
+            if fp16:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                optimizer.step()
+
             grad_accum_counter = 0
             step += 1
             pbar.update(1)
@@ -280,18 +293,39 @@ def train_gpu(
             padded.append(t)
         batch = torch.stack(padded).to(device)
         optimizer.zero_grad()
-        logits, _, _, _ = model(batch)
-        loss = nn.functional.cross_entropy(
-            logits[:, :-1, :].reshape(-1, config.vocab_size),
-            batch[:, 1:].reshape(-1),
-            ignore_index=-1,
-        )
+
+        if fp16:
+            with torch.cuda.amp.autocast():
+                logits, _, _, _ = model(batch)
+                loss = nn.functional.cross_entropy(
+                    logits[:, :-1, :].reshape(-1, config.vocab_size),
+                    batch[:, 1:].reshape(-1),
+                    ignore_index=-1,
+                )
+        else:
+            logits, _, _, _ = model(batch)
+            loss = nn.functional.cross_entropy(
+                logits[:, :-1, :].reshape(-1, config.vocab_size),
+                batch[:, 1:].reshape(-1),
+                ignore_index=-1,
+            )
+
         loss = loss / grad_accum
-        loss.backward()
+        if fp16:
+            scaler.scale(loss).backward()
+        else:
+            loss.backward()
         grad_accum_counter += 1
 
     if grad_accum_counter > 0:
-        optimizer.step()
+        if fp16:
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            optimizer.step()
         step += 1
         pbar.update(1)
         pbar.set_postfix(loss=f"{loss.item() * grad_accum:.4f}")
@@ -313,19 +347,22 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--resume", type=str, default=None)
     parser.add_argument("--steps", type=int, default=50000)
-    parser.add_argument("--batch", type=int, default=2)
-    parser.add_argument("--grad-accum", type=int, default=2)
-    parser.add_argument("--compile", action="store_true")
+    parser.add_argument("--batch", type=int, default=1)
+    parser.add_argument("--grad-accum", type=int, default=4)
     parser.add_argument("--model", type=str, default="small", choices=["tiny", "small"])
-    parser.add_argument("--single-gpu", action="store_true", default=True)
+    parser.add_argument("--single-gpu", action="store_true")
     parser.add_argument("--multi-gpu", action="store_true")
+    parser.add_argument("--max-seq-len", type=int, default=256)
+    parser.add_argument("--no-fp16", action="store_true")
     args = parser.parse_args()
     train_gpu(
         resume_from=args.resume,
         max_steps=args.steps,
         batch_size=args.batch,
         grad_accum=args.grad_accum,
-        compile_model=args.compile,
+        compile_model=False,
         model_size=args.model,
         single_gpu=not args.multi_gpu,
+        max_seq_len=args.max_seq_len,
+        fp16=not args.no_fp16,
     )
