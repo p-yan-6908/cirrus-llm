@@ -348,7 +348,7 @@ if __name__ == "__main__":
     parser.add_argument("--batch", type=int, default=1)
     parser.add_argument("--grad-accum", type=int, default=4)
     parser.add_argument("--model", type=str, default="small", choices=["tiny", "small"])
-    parser.add_argument("--single-gpu", action="store_true")
+    parser.add_argument("--single-gpu", action="store_true", default=False)
     parser.add_argument("--max-seq-len", type=int, default=256)
     parser.add_argument("--no-fp16", action="store_true")
     args = parser.parse_args()
@@ -359,7 +359,7 @@ if __name__ == "__main__":
         grad_accum=args.grad_accum,
         compile_model=False,
         model_size=args.model,
-        single_gpu=not args.multi_gpu,
+        single_gpu=args.single_gpu,
         max_seq_len=args.max_seq_len,
         fp16=not args.no_fp16,
     )
